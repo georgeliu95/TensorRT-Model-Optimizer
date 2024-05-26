@@ -114,9 +114,13 @@ def generate_dummy_inputs(sd_version, device):
     return dummy_input
 
 
-def modelopt_export_sd(base, exp_name, model_name):
+def modelopt_export_sd(base, exp_name, model_name, use_fp16=False):
     os.makedirs(f"./{exp_name}", exist_ok=True)
     dummy_inputs = generate_dummy_inputs(model_name, device=base.unet.device)
+    if use_fp16:
+        for key, val in dummy_inputs.items():
+            if val.dtype == torch.float32:
+                dummy_inputs[key] = val.to(torch.float16)
 
     output = Path(f"./{exp_name}/unet.onnx")
     if (

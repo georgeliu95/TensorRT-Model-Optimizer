@@ -23,11 +23,7 @@ import argparse
 
 import torch
 from diffusers import DiffusionPipeline, StableDiffusionPipeline
-from utils import (
-    get_fp8_config,
-    get_int8_config,
-    load_calib_prompts,
-)
+from utils import INT8_WoQ_CFG, get_fp8_config, get_int8_config, load_calib_prompts
 
 import modelopt.torch.opt as mto
 import modelopt.torch.quantization as mtq
@@ -76,8 +72,9 @@ def main():
         type=str,
         required=False,
         default="default",
-        choices=["global_min", "min-max", "min-mean", "mean-max", "default"],
+        choices=["global-min", "min-max", "min-mean", "mean-max", "default", "weight_only"],
     )
+    parser.add_argument("--woq", action="store_true")
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--calib-size", type=int, default=128)
     parser.add_argument("--alpha", type=float, default=1.0, help="SmoothQuant Alpha")
@@ -95,7 +92,7 @@ def main():
 
     if args.model == "runwayml/stable-diffusion-v1-5":
         pipe = StableDiffusionPipeline.from_pretrained(
-            args.model, torch_dtype=torch.float16, safety_checker=None
+            args.model, torch_dtype=torch.float16, variant="fp16", safety_checker=None
         )
     else:
         pipe = DiffusionPipeline.from_pretrained(
@@ -112,17 +109,20 @@ def main():
         1 if args.model == "runwayml/stable-diffusion-v1-5" else 0
     )  # Depending on the scheduler. some schedulers will do n+1 steps
     if args.format == "int8":
-        # Making sure to use global_min in the calibrator for SD 1.5
+        # Making sure to use global-min in the calibrator for SD 1.5
         if args.model == "runwayml/stable-diffusion-v1-5":
             args.collect_method = "global_min"
-        quant_config = get_int8_config(
-            pipe.unet,
-            args.quant_level,
-            args.alpha,
-            args.percentile,
-            args.n_steps + extra_step,
-            collect_method=args.collect_method,
-        )
+        if args.woq:
+            quant_config = INT8_WoQ_CFG
+        else:
+            quant_config = get_int8_config(
+                pipe.unet,
+                args.quant_level,
+                args.alpha,
+                args.percentile,
+                args.n_steps + extra_step,
+                collect_method=args.collect_method,
+            )
     else:
         if args.collect_method == "default":
             quant_config = mtq.FP8_DEFAULT_CFG

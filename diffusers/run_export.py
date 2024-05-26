@@ -50,6 +50,7 @@ def main():
         default="./base.unet.state_dict.fp8.0.25.384.percentile.all.pt",
     )
     parser.add_argument("--format", default="int8", choices=["int8", "fp8"])
+    parser.add_argument("--woq", action="store_true")
     parser.add_argument(
         "--quant-level",
         default=3.0,
@@ -61,7 +62,7 @@ def main():
 
     if args.model == "runwayml/stable-diffusion-v1-5":
         pipe = StableDiffusionPipeline.from_pretrained(
-            args.model, torch_dtype=torch.float16, safety_checker=None
+            args.model, torch_dtype=torch.float16, variant="fp16", safety_checker=None
         )
     else:
         pipe = DiffusionPipeline.from_pretrained(
@@ -74,14 +75,34 @@ def main():
     # Lets restore the quantized model
     mto.restore(pipe.unet, args.quantized_ckpt)
 
-    quantize_lvl(pipe.unet, args.quant_level)
-    mtq.disable_quantizer(pipe.unet, filter_func)
+    if not args.woq:
+        quantize_lvl(pipe.unet, args.quant_level)
+        mtq.disable_quantizer(pipe.unet, filter_func)
 
-    # QDQ needs to be in FP32
-    pipe.unet.to(torch.float32).to("cpu")
+    if args.woq:
+        from diffusers.models.lora import LoRACompatibleConv, LoRACompatibleLinear
+        for name, module in pipe.unet.named_modules():
+            if isinstance(module, (torch.nn.Conv2d, LoRACompatibleConv)):
+                module.input_quantizer.disable()
+                module.weight_quantizer.enable()
+            elif isinstance(module, (torch.nn.Linear, LoRACompatibleLinear)):
+                if "ff.net" in name:
+                    module.input_quantizer.disable()
+                    module.weight_quantizer.enable()
+                # elif ("to_q" in name or "to_k" in name or "to_v" in name):
+                #     module.input_quantizer.disable()
+                #     module.weight_quantizer.enable()
+                else:
+                    module.input_quantizer.disable()
+                    module.weight_quantizer.disable()
+        mtq.disable_quantizer(pipe.unet, filter_func)
+        pipe.unet.to("cuda")
+    else:
+        # QDQ needs to be in FP32
+        pipe.unet.to(torch.float32).to("cpu")
     if args.format == "fp8":
         generate_fp8_scales(pipe.unet)
-    modelopt_export_sd(pipe, f"{str(args.onnx_dir)}", args.model)
+    modelopt_export_sd(pipe, f"{str(args.onnx_dir)}", args.model, use_fp16=args.woq)
 
 
 if __name__ == "__main__":

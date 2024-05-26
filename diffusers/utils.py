@@ -25,6 +25,18 @@ import torch
 from calib.plugin_calib import PercentileCalibrator
 from diffusers.models.lora import LoRACompatibleConv, LoRACompatibleLinear
 
+INT8_WoQ_CFG = {
+    "quant_cfg": {
+        "*weight_quantizer": {"num_bits": 8, "axis": 0},
+        "*input_quantizer": {"enable": False},
+        "*lm_head*": {"enable": False},
+        "*block_sparse_moe.gate*": {"enable": False},  # Skip the MOE router
+        "*output_layer*": {"enable": False},
+        "default": {"num_bits": 8, "axis": None},
+    },
+    "algorithm": "max",
+}
+
 
 def filter_func(name):
     pattern = re.compile(
