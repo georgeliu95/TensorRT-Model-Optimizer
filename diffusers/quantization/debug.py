@@ -81,6 +81,11 @@ def quantize_lvl(unet, quant_level=2.5):
             if isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Linear):
                 module.input_quantizer.disable()
                 module.weight_quantizer.disable()
+            elif isinstance(module, Attention):
+                module.q_bmm_quantizer.disable()
+                module.k_bmm_quantizer.disable()
+                module.v_bmm_quantizer.disable()
+                module.softmax_quantizer.disable()
         elif isinstance(module, torch.nn.Conv2d):
             module.input_quantizer.enable()
             module.weight_quantizer.enable()
@@ -357,6 +362,7 @@ def main():
                       controlnet_conditioning_scale=[1.0, 1.0]).images
         images[0].save(f"test.debug.{args.format}.1.png")
 
+    print(backbone)
     if args.onnx_dir is not None:
         if args.format == "fp8":
             generate_fp8_scales(backbone)
