@@ -1,6 +1,17 @@
 Changelog
 =========
 
+0.49.0 (2026-11-xx)
+^^^^^^^^^^^^^^^^^^^
+
+**New Features**
+
+**Backward Breaking Changes**
+
+**Deprecations**
+
+**Bug Fixes**
+
 0.48.0 (2026-10-xx)
 ^^^^^^^^^^^^^^^^^^^
 
