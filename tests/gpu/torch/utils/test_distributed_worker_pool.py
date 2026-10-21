@@ -15,6 +15,8 @@
 
 """A hung job must not leave a pool that stalls every later job."""
 
+import multiprocessing
+import os
 import queue
 import time
 
@@ -39,6 +41,19 @@ def _fail(rank, size):
 
 def _teardown_barrier(rank, size):
     dist.barrier()  # like megatron_worker_teardown: blocks while a peer is still in the job
+
+
+def _rank_0_fails_and_rank_1_dies_later(rank, size):
+    if rank == 0:
+        raise ValueError("rank 0 failed")
+    time.sleep(2)  # rank 0 has reported by then
+    os._exit(13)
+
+
+def _rank_0_dies_and_rank_1_waits_for_it(rank, size):
+    if rank == 0:
+        os._exit(13)  # what an illegal memory access or an OOM kill does: no exception, no result
+    time.sleep(600)
 
 
 def test_a_hung_job_kills_the_pool_instead_of_stalling_later_runs(capfd):
@@ -83,3 +98,41 @@ def test_a_failed_job_retires_the_pool_even_when_every_rank_replied():
         assert pool.broken
     finally:
         pool.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("job", "message"),
+    [
+        (_rank_0_dies_and_rank_1_waits_for_it, r"died.*13"),
+        # The error a rank reported before the death is kept in the message
+        (_rank_0_fails_and_rank_1_dies_later, r"(?s)died.*13.*rank 0 failed"),
+    ],
+)
+def test_a_dead_worker_fails_the_run_at_once_and_kills_its_peers(job, message):
+    pool = DistributedWorkerPool(world_size=2, backend="gloo", teardown_fn=None)
+    try:
+        pool.job_timeout = 30  # a run that misses the death fails here, not at the test's own cap
+        start = time.monotonic()
+        with pytest.raises(RuntimeError, match=message):
+            pool.run(job)
+
+        assert time.monotonic() - start < 20  # not the 600 s job timeout
+        assert pool.broken
+        assert not any(p.is_alive() for p in pool._processes)  # the peer in the job is killed too
+    finally:
+        pool.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error"),
+    [
+        ({"backend": "not-a-backend"}, RuntimeError),  # every worker dies in init_process_group
+        ({"ready_timeout": 0.01}, queue.Empty),  # the workers are still starting when the wait ends
+    ],
+)
+def test_a_failed_start_raises_and_leaves_no_workers(kwargs, error):
+    before = {p.pid for p in multiprocessing.active_children()}
+    with pytest.raises(error):
+        DistributedWorkerPool(world_size=1, **{"backend": "gloo", "teardown_fn": None, **kwargs})
+    time.sleep(1)
+    assert {p.pid for p in multiprocessing.active_children()} <= before
